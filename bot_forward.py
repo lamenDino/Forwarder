@@ -12,16 +12,13 @@ CHANNEL_USERNAME = 'freegamesnot'
 GROUP_CHAT_ID = int(os.getenv('GROUP_CHAT_ID'))
 CHECK_INTERVAL = 30 * 60  # 30 minuti
 
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 last_update_id = 0
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot di forwarding avviato!")
+    await update.message.reply_text("Bot di forwarding avviato!\nChat ID gruppo: {}".format(update.effective_chat.id))
     logger.info(f"Chat ID gruppo: {update.effective_chat.id}")
 
 async def forward_loop(application: Application):
@@ -46,9 +43,13 @@ async def forward_loop(application: Application):
 def main():
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler('start', start))
-    # Avvia subito il forwarding loop
-    application.job_queue.run_once(lambda ctx: asyncio.create_task(forward_loop(application)), when=0)
-    application.run_polling()
+    # Avvia manualmente il loop asincrono all'avvio:
+    async def runner():
+        await asyncio.gather(
+            application.start(),
+            forward_loop(application)
+        )
+    asyncio.run(runner())
 
 if __name__ == '__main__':
     main()
