@@ -7,7 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY bot_forward.py ./
 
-# Espone porta 8080 per il health check
 EXPOSE 8080
 
 CMD ["python", "bot_forward.py"]
