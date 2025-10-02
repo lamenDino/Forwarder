@@ -1,11 +1,12 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-# Copia solo code e requirements
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY bot_forward.py ./
 
-EXPOSE 8080
+# Espone la porta usata da Render (default 10000)
+EXPOSE 10000
+
 CMD ["python", "bot_forward.py"]
