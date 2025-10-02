@@ -5,10 +5,10 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, ChatMemberUpdated, BotCommand
 from telegram.ext import (
     Application, ContextTypes, CommandHandler,
-    ChatMemberHandler, MessageHandler, filters
+    ChatMemberHandler, ChannelPostHandler
 )
 
-# Configurazione
+# Config
 TOKEN = os.getenv("TELEGRAM_BOTTOKEN")
 PORT = int(os.getenv("PORT", "8080"))
 
@@ -21,10 +21,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Stato
-group_channel = {}  # {group_id: channel_username}
+# Mapping gruppo → canale
+group_channel: dict[int, str] = {}
 
-# Health check HTTP server
+# Health check
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/healthz"):
@@ -44,7 +44,7 @@ def run_http_server():
 # /start in privato
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Bot avviato! Aggiungimi in un gruppo e usa /setcanale @nomeCanale."
+        "Bot attivo! Invita in un gruppo e usa /setcanale @nomeCanale."
     )
 
 # Bot aggiunto al gruppo
@@ -52,7 +52,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chm: ChatMemberUpdated = update.chat_member
     if chm.new_chat_member.user.is_bot and chm.new_chat_member.status in ("member", "administrator"):
         await update.effective_chat.send_message(
-            "Usa /setcanale @nomeCanale per inoltrare i post del canale al gruppo."
+            "Usa /setcanale @nomeCanale per inoltrare post del canale al gruppo."
         )
 
 # Controllo admin
@@ -60,14 +60,14 @@ async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     member = await context.bot.get_chat_member(update.effective_chat.id, update.effective_user.id)
     return member.status in ("administrator", "creator")
 
-# /setcanale comando
+# /setcanale
 async def set_canale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update, context):
         await update.message.reply_text("Devi essere amministratore.")
         return
 
     args = context.args
-    if len(args)!=1 or not args[0].startswith("@"):
+    if len(args) != 1 or not args[0].startswith("@"):
         await update.message.reply_text("Uso: /setcanale @nomeCanale")
         return
 
@@ -77,11 +77,11 @@ async def set_canale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Canale impostato su @{chan}.")
     logger.info(f"Gruppo {gid} → canale {chan}")
 
-# Handler dinamico per i post di canale
+# Handler per post del canale
 async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Identifica il gruppo di destinazione
-    for gid, chan in group_channel.items():
-        if update.channel_post.chat.username == chan:
+    chan = update.channel_post.chat.username
+    for gid, target_chan in group_channel.items():
+        if chan == target_chan:
             await context.bot.forward_message(
                 chat_id=gid,
                 from_chat_id=update.channel_post.chat.id,
@@ -90,10 +90,10 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.info(f"Inoltrato post {update.channel_post.message_id} da @{chan} a gruppo {gid}")
 
 def main():
-    async def set_commands(app):
+    async def set_commands(app: Application):
         await app.bot.set_my_commands([
-            BotCommand("start","Avvia bot"),
-            BotCommand("setcanale","Imposta canale")
+            BotCommand("start", "Avvia il bot"),
+            BotCommand("setcanale", "Imposta il canale da inoltrare")
         ])
 
     app = (
@@ -107,13 +107,13 @@ def main():
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("setcanale", set_canale))
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
-    app.add_handler(MessageHandler(filters.CHANNEL, channel_post_handler))
+    app.add_handler(ChannelPostHandler(channel_post_handler))
 
-    # Health server
+    # HTTP health server
     threading.Thread(target=run_http_server, daemon=True).start()
 
-    # Avvio polling
+    # Avvia polling
     app.run_polling()
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
