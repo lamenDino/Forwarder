@@ -5,13 +5,12 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, ChatMemberUpdated, BotCommand
 from telegram.ext import (
     Application, ContextTypes, CommandHandler,
-    ChatMemberHandler, filters
+    ChatMemberHandler, MessageHandler, filters
 )
 
 # Configurazione
 TOKEN = os.getenv("TELEGRAM_BOTTOKEN")
 PORT = int(os.getenv("PORT", "8080"))
-CHECK_INTERVAL = 60  # 30 minuti
 
 if not TOKEN:
     raise RuntimeError("❌ TELEGRAM_BOTTOKEN non trovato nelle ENV")
@@ -23,8 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Stato
-group_channels: dict[int, str] = {}
-last_ids: dict[str, int] = {}
+group_channel = {}  # {group_id: channel_username}
 
 # Health check HTTP server
 class HealthHandler(BaseHTTPRequestHandler):
@@ -41,14 +39,12 @@ class HealthHandler(BaseHTTPRequestHandler):
         return
 
 def run_http_server():
-    httpd = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    logger.info(f"Health endpoint listening on 0.0.0.0:{PORT}")
-    httpd.serve_forever()
+    HTTPServer(("0.0.0.0", PORT), HealthHandler).serve_forever()
 
 # /start in privato
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Bot avviato! Aggiungimi in un gruppo e usa /setcanale @nomeCanale per impostare il canale."
+        "Bot avviato! Aggiungimi in un gruppo e usa /setcanale @nomeCanale."
     )
 
 # Bot aggiunto al gruppo
@@ -56,7 +52,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chm: ChatMemberUpdated = update.chat_member
     if chm.new_chat_member.user.is_bot and chm.new_chat_member.status in ("member", "administrator"):
         await update.effective_chat.send_message(
-            "Usa /setcanale @nomeCanale per impostare il canale da cui ricevere news ogni 30 minuti."
+            "Usa /setcanale @nomeCanale per inoltrare i post del canale al gruppo."
         )
 
 # Controllo admin
@@ -67,45 +63,40 @@ async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
 # /setcanale comando
 async def set_canale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update, context):
-        await update.message.reply_text("Devi essere amministratore per usare questo comando.")
+        await update.message.reply_text("Devi essere amministratore.")
         return
 
     args = context.args
-    if len(args) != 1 or not args[0].startswith("@"):
-        await update.message.reply_text("Uso corretto: /setcanale @nomeCanale")
+    if len(args)!=1 or not args[0].startswith("@"):
+        await update.message.reply_text("Uso: /setcanale @nomeCanale")
         return
 
-    channel = args[0][1:]
-    chat_id = update.effective_chat.id
-    group_channels[chat_id] = channel
-    last_ids.setdefault(channel, 0)
-    await update.message.reply_text(f"Canale impostato su @{channel}.")
-    logger.info(f"Gruppo {chat_id} → canale {channel}")
+    chan = args[0][1:]
+    gid = update.effective_chat.id
+    group_channel[gid] = chan
+    await update.message.reply_text(f"Canale impostato su @{chan}.")
+    logger.info(f"Gruppo {gid} → canale {chan}")
 
-# Job ricorrente forwarding
-async def forward_job(context: ContextTypes.DEFAULT_TYPE):
-    bot = context.bot
-    for group_id, channel in group_channels.items():
-        last_id = last_ids.get(channel, 0)
-        history = await bot.get_chat_history(chat_id=f"@{channel}", limit=10)
-        for msg in reversed(history):
-            if msg.message_id > last_id:
-                await bot.forward_message(
-                    chat_id=group_id,
-                    from_chat_id=msg.chat.id,
-                    message_id=msg.message_id
-                )
-                last_ids[channel] = msg.message_id
-                logger.info(f"Inoltrato messaggio {msg.message_id} da @{channel} a gruppo {group_id}")
+# Handler dinamico per i post di canale
+async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Identifica il gruppo di destinazione
+    for gid, chan in group_channel.items():
+        if update.channel_post.chat.username == chan:
+            await context.bot.forward_message(
+                chat_id=gid,
+                from_chat_id=update.channel_post.chat.id,
+                message_id=update.channel_post.message_id
+            )
+            logger.info(f"Inoltrato post {update.channel_post.message_id} da @{chan} a gruppo {gid}")
 
 def main():
-    async def set_commands(app: Application):
+    async def set_commands(app):
         await app.bot.set_my_commands([
-            BotCommand("start", "Avvia il bot"),
-            BotCommand("setcanale", "Imposta il canale da cui ricevere news")
+            BotCommand("start","Avvia bot"),
+            BotCommand("setcanale","Imposta canale")
         ])
 
-    application = (
+    app = (
         Application.builder()
         .token(TOKEN)
         .post_init(set_commands)
@@ -113,22 +104,16 @@ def main():
     )
 
     # Handler
-    application.add_handler(CommandHandler("start", start_cmd))
-    application.add_handler(CommandHandler("setcanale", set_canale))
-    application.add_handler(
-        ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
-    )
-    # Rimuove handler generici: non registrare MessageHandler
+    app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("setcanale", set_canale))
+    app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_handler(MessageHandler(filters.CHANNEL_POST, channel_post_handler))
 
-    # JobQueue
-    jq = application.job_queue
-    jq.run_repeating(forward_job, interval=CHECK_INTERVAL, first=10)
-
-    # HTTP health server
+    # Health server
     threading.Thread(target=run_http_server, daemon=True).start()
 
     # Avvio polling
-    application.run_polling()
+    app.run_polling()
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
