@@ -1,17 +1,15 @@
 import os
 import logging
 import threading
-import asyncio
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update, ChatMember, ChatMemberUpdated, BotCommand
+from telegram import Update, ChatMemberUpdated, BotCommand
 from telegram.ext import (
     Application, ContextTypes, CommandHandler,
     ChatMemberHandler, MessageHandler, filters
 )
 
-# Config  
+# Configurazione
 TOKEN = os.getenv("TELEGRAM_BOTTOKEN")
-GROUPCHATID = int(os.getenv("GROUPCHATID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
 CHECK_INTERVAL = 30 * 60  # 30 minuti
 
@@ -24,7 +22,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Memoria dei canali per gruppo e last message_id
+# Stato bot
 group_channels: dict[int, str] = {}
 last_ids: dict[str, int] = {}
 
@@ -39,30 +37,29 @@ class HealthHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
-
     def log_message(self, fmt, *args):
-        return  # disabilita log default
+        return
 
 def run_http_server():
     httpd = HTTPServer(("0.0.0.0", PORT), HealthHandler)
     logger.info(f"Health endpoint listening on 0.0.0.0:{PORT}")
     httpd.serve_forever()
 
-# Handler /start (in chat privato)
+# /start in privato
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Bot avviato! Aggiungimi in un gruppo per configurare il canale delle notizie."
     )
 
-# Quando il bot viene aggiunto a un gruppo
+# Bot aggiunto al gruppo
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    status = update.chat_member.new_chat_member.status
-    if update.chat_member.new_chat_member.user.is_bot and status in ("member", "administrator"):
+    chm: ChatMemberUpdated = update.chat_member
+    if chm.new_chat_member.user.is_bot and chm.new_chat_member.status in ("member", "administrator"):
         await update.effective_chat.send_message(
-            "Per favore, scrivete l'username del canale da cui ricevere le notizie ogni 30 minuti (es. @nomecanale)."
+            "Scrivete l'username del canale da cui ricevere notizie ogni 30 minuti (es. @nomecanale)."
         )
 
-# Gestione della risposta con l’username del canale
+# Ricezione @canale
 async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     chat_id = update.effective_chat.id
@@ -75,12 +72,11 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Formato non valido. Scrivi @nomecanale.")
 
-# Job ricorrente per inoltrare le notizie
+# Job ricorrente forwarding
 async def forward_job(context: ContextTypes.DEFAULT_TYPE):
     bot = context.bot
     for group_id, channel in group_channels.items():
-        last_id = last_ids.get(channel, 0)
-        # Legge ultimi 10 messaggi dal canale
+        last_id = last_ids[channel]
         history = await bot.get_chat_history(chat_id=f"@{channel}", limit=10)
         for msg in reversed(history):
             if msg.message_id > last_id:
@@ -92,11 +88,18 @@ async def forward_job(context: ContextTypes.DEFAULT_TYPE):
                 last_ids[channel] = msg.message_id
 
 def main():
-    application = Application.builder().token(TOKEN).build()
+    # Configura Application con post_init per comandi
+    async def set_commands(app: Application):
+        await app.bot.set_my_commands([BotCommand("start", "Avvia il bot")])
 
-    # Registra comando /start e aiuta Telegram a mostrarlo
-    application.bot.set_my_commands([BotCommand("start", "Avvia il bot")])
+    application = (
+        Application.builder()
+        .token(TOKEN)
+        .post_init(set_commands)
+        .build()
+    )
 
+    # Handler
     application.add_handler(CommandHandler("start", start_cmd))
     application.add_handler(
         ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
@@ -105,14 +108,14 @@ def main():
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_channel)
     )
 
-    # JobQueue per forwarding
+    # JobQueue
     jq = application.job_queue
     jq.run_repeating(forward_job, interval=CHECK_INTERVAL, first=10)
 
-    # Avvio thread HTTP server
+    # HTTP health server
     threading.Thread(target=run_http_server, daemon=True).start()
 
-    # Avvia polling (unico getUpdates)
+    # Avvio polling
     application.run_polling()
 
 if __name__ == "__main__":
