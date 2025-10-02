@@ -13,7 +13,7 @@ from telegram.ext import (
 # Configurazione
 TOKEN = os.getenv("TELEGRAM_BOTTOKEN")
 PORT = int(os.getenv("PORT", "8080"))
-CHECK_INTERVAL = 30 * 60  # 30 minuti
+CHECK_INTERVAL = 60
 
 if not TOKEN:
     raise RuntimeError("❌ TELEGRAM_BOTTOKEN non trovato nelle ENV")
