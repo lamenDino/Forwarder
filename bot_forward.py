@@ -2,7 +2,9 @@ import os
 import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update, ChatMemberUpdated, BotCommand
+from telegram import (
+    Update, ChatMemberUpdated, BotCommand, ChatAdministratorRights
+)
 from telegram.ext import (
     Application, ContextTypes, CommandHandler,
     ChatMemberHandler, MessageHandler, filters
@@ -48,7 +50,7 @@ def run_http_server():
 # /start in privato
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Bot avviato! Aggiungimi in un gruppo per configurare il canale delle notizie."
+        "Bot avviato! Aggiungimi in un gruppo e usa /setcanale @nomeCanale per impostare il canale."
     )
 
 # Bot aggiunto al gruppo
@@ -56,27 +58,37 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chm: ChatMemberUpdated = update.chat_member
     if chm.new_chat_member.user.is_bot and chm.new_chat_member.status in ("member", "administrator"):
         await update.effective_chat.send_message(
-            "Scrivete l'username del canale da cui ricevere notizie ogni 30 minuti (es. @nomecanale)."
+            "Usa il comando /setcanale @nomeCanale per impostare il canale da cui ricevere news ogni 30 minuti."
         )
 
-# Ricezione @canale
-async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+# Controllo se un utente è admin
+async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    member = await context.bot.get_chat_member(update.effective_chat.id, update.effective_user.id)
+    return member.status in ("administrator", "creator")
+
+# /setcanale comando
+async def set_canale(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_admin(update, context):
+        await update.message.reply_text("Devi essere amministratore per usare questo comando.")
+        return
+
+    args = context.args
+    if len(args) != 1 or not args[0].startswith("@"):
+        await update.message.reply_text("Uso corretto: /setcanale @nomeCanale")
+        return
+
+    channel = args[0][1:]
     chat_id = update.effective_chat.id
-    if text.startswith("@"):
-        channel = text[1:]
-        group_channels[chat_id] = channel
-        last_ids.setdefault(channel, 0)
-        await update.message.reply_text(f"Canale impostato su @{channel}.")
-        logger.info(f"Gruppo {chat_id} → canale {channel}")
-    else:
-        await update.message.reply_text("Formato non valido. Scrivi @nomecanale.")
+    group_channels[chat_id] = channel
+    last_ids.setdefault(channel, 0)
+    await update.message.reply_text(f"Canale impostato su @{channel}.")
+    logger.info(f"Gruppo {chat_id} → canale {channel}")
 
 # Job ricorrente forwarding
 async def forward_job(context: ContextTypes.DEFAULT_TYPE):
     bot = context.bot
     for group_id, channel in group_channels.items():
-        last_id = last_ids[channel]
+        last_id = last_ids.get(channel, 0)
         history = await bot.get_chat_history(chat_id=f"@{channel}", limit=10)
         for msg in reversed(history):
             if msg.message_id > last_id:
@@ -86,11 +98,14 @@ async def forward_job(context: ContextTypes.DEFAULT_TYPE):
                     message_id=msg.message_id
                 )
                 last_ids[channel] = msg.message_id
+                logger.info(f"Inoltrato messaggio {msg.message_id} da @{channel} a gruppo {group_id}")
 
 def main():
-    # Configura Application con post_init per comandi
     async def set_commands(app: Application):
-        await app.bot.set_my_commands([BotCommand("start", "Avvia il bot")])
+        await app.bot.set_my_commands([
+            BotCommand("start", "Avvia il bot"),
+            BotCommand("setcanale", "Imposta il canale da cui ricevere news")
+        ])
 
     application = (
         Application.builder()
@@ -101,12 +116,12 @@ def main():
 
     # Handler
     application.add_handler(CommandHandler("start", start_cmd))
+    application.add_handler(CommandHandler("setcanale", set_canale))
     application.add_handler(
         ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
     )
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_channel)
-    )
+    # Ignora tutti i messaggi normali:
+    application.add_handler(MessageHandler(filters.ALL, lambda u,c: None))
 
     # JobQueue
     jq = application.job_queue
