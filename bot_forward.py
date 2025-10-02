@@ -79,7 +79,7 @@ async def set_canale(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chan = args[0][1:]
     gid = update.effective_chat.id
     group_channel[gid] = chan
-    await update.message.reply_text(f"Canale impostato su @{chan}.")
+    await update.message.reply_text(f"✅ Canale impostato su @{chan}.")
     logger.info(f"Gruppo {gid} → canale {chan}")
 
 # Handler per post del canale
@@ -97,18 +97,15 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             )
 
 def main():
-    async def set_commands(app):
-        await app.bot.set_my_commands([
-            BotCommand("start", "Avvia il bot"),
-            BotCommand("setcanale", "Imposta il canale da inoltrare"),
-        ])
+    # Crea Application
+    app = Application.builder().token(TOKEN).build()
 
-    app = (
-        Application.builder()
-        .token(TOKEN)
-        .post_init(set_commands)
-        .build()
-    )
+    # Registra i comandi (deve essere await, quindi agganciamolo nel main)
+    commands = [
+        BotCommand("start", "Avvia il bot"),
+        BotCommand("setcanale", "Imposta il canale da inoltrare")
+    ]
+    app.bot.set_my_commands(commands)
 
     # Handler
     app.add_handler(CommandHandler("start", start_cmd))
@@ -116,7 +113,6 @@ def main():
     app.add_handler(
         ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
     )
-    # Cattura solo post dei canali
     app.add_handler(
         MessageHandler(filters.ChatType.CHANNEL, channel_post_handler)
     )
