@@ -107,7 +107,7 @@ def main():
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("setcanale", set_canale))
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
-    app.add_handler(MessageHandler(filters.CHANNEL_POST, channel_post_handler))
+    app.add_handler(MessageHandler(filters.CHANNEL, channel_post_handler))
 
     # Health server
     threading.Thread(target=run_http_server, daemon=True).start()
