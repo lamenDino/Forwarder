@@ -2,18 +2,16 @@ import os
 import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import (
-    Update, ChatMemberUpdated, BotCommand, ChatAdministratorRights
-)
+from telegram import Update, ChatMemberUpdated, BotCommand
 from telegram.ext import (
     Application, ContextTypes, CommandHandler,
-    ChatMemberHandler, MessageHandler, filters
+    ChatMemberHandler, filters
 )
 
 # Configurazione
 TOKEN = os.getenv("TELEGRAM_BOTTOKEN")
 PORT = int(os.getenv("PORT", "8080"))
-CHECK_INTERVAL = 60
+CHECK_INTERVAL = 60  # 30 minuti
 
 if not TOKEN:
     raise RuntimeError("❌ TELEGRAM_BOTTOKEN non trovato nelle ENV")
@@ -24,7 +22,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Stato bot
+# Stato
 group_channels: dict[int, str] = {}
 last_ids: dict[str, int] = {}
 
@@ -58,10 +56,10 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chm: ChatMemberUpdated = update.chat_member
     if chm.new_chat_member.user.is_bot and chm.new_chat_member.status in ("member", "administrator"):
         await update.effective_chat.send_message(
-            "Usa il comando /setcanale @nomeCanale per impostare il canale da cui ricevere news ogni 30 minuti."
+            "Usa /setcanale @nomeCanale per impostare il canale da cui ricevere news ogni 30 minuti."
         )
 
-# Controllo se un utente è admin
+# Controllo admin
 async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     member = await context.bot.get_chat_member(update.effective_chat.id, update.effective_user.id)
     return member.status in ("administrator", "creator")
@@ -120,8 +118,7 @@ def main():
     application.add_handler(
         ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
     )
-    # Ignora tutti i messaggi normali:
-    application.add_handler(MessageHandler(filters.ALL, lambda u,c: None))
+    # Rimuove handler generici: non registrare MessageHandler
 
     # JobQueue
     jq = application.job_queue
