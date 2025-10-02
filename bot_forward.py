@@ -5,7 +5,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, ChatMemberUpdated, BotCommand
 from telegram.ext import (
     Application, ContextTypes, CommandHandler,
-    ChatMemberHandler, ChannelPostHandler
+    ChatMemberHandler, MessageHandler, filters
 )
 
 # Config
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Mapping gruppo → canale
 group_channel: dict[int, str] = {}
 
-# Health check
+# Health check HTTP server
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/healthz"):
@@ -50,14 +50,19 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Bot aggiunto al gruppo
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chm: ChatMemberUpdated = update.chat_member
-    if chm.new_chat_member.user.is_bot and chm.new_chat_member.status in ("member", "administrator"):
+    if (
+        chm.new_chat_member.user.is_bot
+        and chm.new_chat_member.status in ("member", "administrator")
+    ):
         await update.effective_chat.send_message(
             "Usa /setcanale @nomeCanale per inoltrare post del canale al gruppo."
         )
 
 # Controllo admin
 async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    member = await context.bot.get_chat_member(update.effective_chat.id, update.effective_user.id)
+    member = await context.bot.get_chat_member(
+        update.effective_chat.id, update.effective_user.id
+    )
     return member.status in ("administrator", "creator")
 
 # /setcanale
@@ -79,21 +84,23 @@ async def set_canale(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Handler per post del canale
 async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chan = update.channel_post.chat.username
+    chan = update.effective_chat.username
     for gid, target_chan in group_channel.items():
         if chan == target_chan:
             await context.bot.forward_message(
                 chat_id=gid,
-                from_chat_id=update.channel_post.chat.id,
-                message_id=update.channel_post.message_id
+                from_chat_id=update.effective_chat.id,
+                message_id=update.message.message_id
             )
-            logger.info(f"Inoltrato post {update.channel_post.message_id} da @{chan} a gruppo {gid}")
+            logger.info(
+                f"Inoltrato post {update.message.message_id} da @{chan} a gruppo {gid}"
+            )
 
 def main():
-    async def set_commands(app: Application):
+    async def set_commands(app):
         await app.bot.set_my_commands([
             BotCommand("start", "Avvia il bot"),
-            BotCommand("setcanale", "Imposta il canale da inoltrare")
+            BotCommand("setcanale", "Imposta il canale da inoltrare"),
         ])
 
     app = (
@@ -106,10 +113,15 @@ def main():
     # Handler
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("setcanale", set_canale))
-    app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
-    app.add_handler(ChannelPostHandler(channel_post_handler))
+    app.add_handler(
+        ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
+    )
+    # Cattura solo post dei canali
+    app.add_handler(
+        MessageHandler(filters.ChatType.CHANNEL, channel_post_handler)
+    )
 
-    # HTTP health server
+    # Avvia health server
     threading.Thread(target=run_http_server, daemon=True).start()
 
     # Avvia polling
